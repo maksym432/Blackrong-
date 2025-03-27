@@ -1,167 +1,189 @@
 #!/usr/bin/env python3
 import os
 import sys
-import time
+import json
+import socket
 import random
-import requests
 import threading
+import time
 from colorama import Fore, Style, init
 
 init(autoreset=True)
 
-def clear():
-    os.system('clear' if os.name == 'posix' else 'cls')
+CONFIG_FILE = "ddnet_config.json"
+BANNER = f"""
+{Fore.CYAN}
+╔═╗╔╦╗╔═╗╦  ╔═╗╦═╗╔═╗╔═╗╦  
+║╣ ║║║╠═╝║  ║╣ ╠╦╝╠═╣║  ║  
+╚═╝╩ ╩╩  ╩═╝╚═╝╩╚═╩ ╩╚═╝╩═╝
+{Fore.YELLOW}DDNet Bot Controller v5.2
+{Style.RESET_ALL}
+"""
 
-def print_banner():
-    clear()
-    print(Fore.GREEN + r"""
-     _______  __   __  _______  _______  ___   _______  __   __  _______ 
-    |       ||  | |  ||       ||       ||   | |       ||  | |  ||       |
-    |    ___||  |_|  ||    ___||   _   ||   | |_     _||  |_|  ||    ___|
-    |   | __ |       ||   |___ |  | |  ||   |   |   |  |       ||   |___ 
-    |   ||  ||       ||    ___||  |_|  ||   |   |   |  |       ||    ___|
-    |   |_| ||   _   ||   |___ |       ||   |   |   |  |   _   ||   |___ 
-    |_______||__| |__||_______||_______||___|   |___|  |__| |__||_______|
-    """ + Style.RESET_ALL)
-    print(Fore.RED + "                          [ TW BOT SPAMMER ]" + Style.RESET_ALL)
-    print(Fore.GREEN + "-" * 60 + Style.RESET_ALL)
+class DDNetProtocol:
+    PACKET_TYPES = {
+        'CONNECT': b'\x00',
+        'ACCEPT': b'\x02',
+        'VOTE': b'\x0a',
+        'CHAT': b'\x0d'
+    }
 
-class BotManager:
-    def __init__(self):
-        self.server_ip = ""
-        self.mode = 0
-        self.message = ""
-        self.vote = ""
-        self.bot_count = 1
-        self.running = False
+    @staticmethod
+    def create_packet(packet_type, payload=b''):
+        return packet_type + payload
 
-    def get_input(self, prompt):
-        print(Fore.GREEN + "-------------------------------------" + Style.RESET_ALL)
-        print(Fore.GREEN + f"server:           | {prompt} |" + Style.RESET_ALL)
-        print(Fore.GREEN + "-------------------------------------" + Style.RESET_ALL)
-        return input(Fore.YELLOW + "> " + Style.RESET_ALL).strip()
-
-    def select_mode(self):
-        print(Fore.CYAN + "\nVote Mode: 1")
-        print("Message Mode: 2")
-        print("Spam Mode: 3" + Style.RESET_ALL)
-        
-        while True:
-            try:
-                mode = int(self.get_input("Select mode (1-3)"))
-                if 1 <= mode <= 3:
-                    self.mode = mode
-                    break
-                else:
-                    print(Fore.RED + "Invalid mode! Please select 1-3" + Style.RESET_ALL)
-            except ValueError:
-                print(Fore.RED + "Please enter a number!" + Style.RESET_ALL)
-
-    def configure_mode(self):
-        if self.mode == 1:  # Vote mode
-            print(Fore.CYAN + "\nVote Options:")
-            print("1. Yes (F3)")
-            print("2. No (F4)" + Style.RESET_ALL)
-            while True:
-                try:
-                    vote = int(self.get_input("Select vote (1-2)"))
-                    if vote == 1:
-                        self.vote = "F3"
-                        break
-                    elif vote == 2:
-                        self.vote = "F4"
-                        break
-                    else:
-                        print(Fore.RED + "Invalid option!" + Style.RESET_ALL)
-                except ValueError:
-                    print(Fore.RED + "Please enter a number!" + Style.RESET_ALL)
-
-        elif self.mode == 2:  # Message mode
-            self.message = self.get_input("Enter message")
-
-    def set_bot_count(self):
-        while True:
-            try:
-                count = int(self.get_input("Bots count (1-10)"))
-                if 1 <= count <= 10:
-                    self.bot_count = count
-                    break
-                else:
-                    print(Fore.RED + "Count must be between 1-10!" + Style.RESET_ALL)
-            except ValueError:
-                print(Fore.RED + "Please enter a number!" + Style.RESET_ALL)
-
-    def bot_action(self, bot_id):
-        try:
-            # Здесь должна быть реальная логика подключения к серверу
-            # Это примерная реализация
-            print(Fore.GREEN + f"[Bot {bot_id}] Connecting to {self.server_ip}..." + Style.RESET_ALL)
-            time.sleep(random.uniform(0.1, 0.5))
-            
-            if self.mode == 1:  # Vote
-                print(Fore.YELLOW + f"[Bot {bot_id}] Voting {self.vote}" + Style.RESET_ALL)
-                time.sleep(random.uniform(0.2, 0.7))
-                
-            elif self.mode == 2:  # Message
-                print(Fore.BLUE + f"[Bot {bot_id}] Sending message: {self.message}" + Style.RESET_ALL)
-                time.sleep(random.uniform(0.3, 1.0))
-                
-            elif self.mode == 3:  # Spam
-                print(Fore.RED + f"[Bot {bot_id}] Spamming connection" + Style.RESET_ALL)
-                time.sleep(random.uniform(0.1, 0.3))
-                
-            print(Fore.GREEN + f"[Bot {bot_id}] Disconnecting" + Style.RESET_ALL)
-            
-        except Exception as e:
-            print(Fore.RED + f"[Bot {bot_id}] Error: {str(e)}" + Style.RESET_ALL)
-
-    def start_attack(self):
+class DDBot:
+    def __init__(self, server_ip, server_port, bot_id, mode):
+        self.server = (server_ip, server_port)
+        self.bot_id = bot_id
+        self.mode = mode
         self.running = True
-        threads = []
-        
-        print(Fore.GREEN + f"\nStarting attack with {self.bot_count} bots..." + Style.RESET_ALL)
-        
-        for i in range(self.bot_count):
-            t = threading.Thread(target=self.bot_action, args=(i+1,))
-            t.daemon = True
-            threads.append(t)
-            t.start()
-            time.sleep(0.1)  # Небольшая задержка между запуском ботов
-            
-        for t in threads:
-            t.join()
-            
-        print(Fore.GREEN + "\nAttack completed!" + Style.RESET_ALL)
+        self.sock = None
+        self.token = None
+        self.client_id = random.randint(0, 0xFFFFFFFF)
+        self.retries = 0
+
+    def connect(self):
+        while self.running and self.retries < 15:
+            try:
+                self._establish_connection()
+                self._main_loop()
+                return
+            except Exception as e:
+                print(f"{Fore.RED}Bot {self.bot_id} error: {str(e)}")
+                self.retries += 1
+                time.sleep(min(30, 2 ** self.retries))
+            finally:
+                if self.sock:
+                    self.sock.close()
+
+    def _establish_connection(self):
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock.settimeout(10)
+
+        # Step 1: Initial handshake
+        self.sock.sendto(
+            DDNetProtocol.create_packet(DDNetProtocol.PACKET_TYPES['CONNECT']),
+            self.server
+        )
+
+        # Step 2: Receive server response
+        response = self.sock.recv(1024)
+        if len(response) < 12:
+            raise ConnectionError("Invalid handshake response")
+
+        self.token = response[4:8]
+        server_time = response[8:12]
+
+        # Step 3: Send client info
+        ack_packet = DDNetProtocol.create_packet(
+            DDNetProtocol.PACKET_TYPES['ACCEPT'],
+            self.token + server_time + self.client_id.to_bytes(4, 'little')
+        )
+        self.sock.sendto(ack_packet, self.server)
+
+        # Step 4: Final confirmation
+        final_response = self.sock.recv(1024)
+        if final_response[0] != 0x02:
+            raise ConnectionError("Connection rejected")
+
+        print(f"{Fore.GREEN}Bot {self.bot_id} connected successfully!")
+
+    def _main_loop(self):
+        while self.running:
+            try:
+                if self.mode == 'vote':
+                    self._send_vote()
+                elif self.mode == 'message':
+                    self._send_message()
+                elif self.mode == 'spam':
+                    self._send_spam()
+                
+                time.sleep(random.uniform(0.5, 2.0))
+            except Exception as e:
+                raise RuntimeError(f"Action failed: {str(e)}")
+
+    def _send_vote(self):
+        packet = DDNetProtocol.create_packet(
+            DDNetProtocol.PACKET_TYPES['VOTE'],
+            self.token + b'\xF3'
+        )
+        self.sock.sendto(packet, self.server)
+
+    def _send_message(self):
+        msg = f"Message from bot {self.bot_id}"
+        packet = DDNetProtocol.create_packet(
+            DDNetProtocol.PACKET_TYPES['CHAT'],
+            msg.encode().ljust(64, b'\x00')
+        )
+        self.sock.sendto(packet, self.server)
+
+    def _send_spam(self):
+        packet = DDNetProtocol.create_packet(
+            DDNetProtocol.PACKET_TYPES['CHAT'],
+            os.urandom(64)
+        )
+        self.sock.sendto(packet, self.server)
+
+    def stop(self):
         self.running = False
 
-    def run(self):
-        print_banner()
-        
-        # Получаем IP сервера
-        self.server_ip = self.get_input("Enter server IP")
-        if not self.server_ip:
-            print(Fore.RED + "Server IP cannot be empty!" + Style.RESET_ALL)
-            return
-            
-        # Выбираем режим
-        self.select_mode()
-        
-        # Конфигурируем выбранный режим
-        self.configure_mode()
-        
-        # Устанавливаем количество ботов
-        self.set_bot_count()
-        
-        # Запускаем атаку
-        self.start_attack()
-        
-        input(Fore.YELLOW + "\nPress Enter to return to main menu..." + Style.RESET_ALL)
-        self.run()
+def load_config():
+    default_config = {
+        'server_ip': '46.174.48.103',
+        'server_port': 53070,
+        'mode': 'message',
+        'bot_count': 20
+    }
+    
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE) as f:
+                user_config = json.load(f)
+                # Объединяем с дефолтными значениями
+                return {**default_config, **user_config}
+        except json.JSONDecodeError:
+            print(f"{Fore.RED}Ошибка в конфиге! Использую настройки по умолчанию")
+            return default_config
+    return default_config
+
+def save_config(config):
+    with open(CONFIG_FILE, 'w') as f:
+        json.dump(config, f, indent=4)
+
+def main():
+    print(BANNER)
+    config = load_config()
+    
+    # Если конфига не существует - сохраняем дефолтный
+    if not os.path.exists(CONFIG_FILE):
+        save_config(config)
+        print(f"{Fore.YELLOW}Создан новый конфиг: {CONFIG_FILE}")
+
+    bots = []
+    try:
+        print(f"{Fore.CYAN}Запускаю {config['bot_count']} ботов в режиме '{config['mode']}'...")
+        for i in range(config['bot_count']):
+            bot = DDBot(
+                config['server_ip'],
+                config['server_port'],
+                i+1,
+                config['mode']
+            )
+            thread = threading.Thread(target=bot.connect)
+            bots.append((bot, thread))
+            thread.start()
+            time.sleep(0.1)
+
+        input("\nНажмите Enter для остановки...")
+    except KeyboardInterrupt:
+        print(f"\n{Fore.RED}Прервано пользователем!")
+    finally:
+        print(f"\n{Fore.RED}Останавливаю ботов...")
+        for bot, thread in bots:
+            bot.stop()
+            thread.join()
+        print(f"{Fore.GREEN}Все процессы завершены!")
 
 if __name__ == "__main__":
-    try:
-        manager = BotManager()
-        manager.run()
-    except KeyboardInterrupt:
-        print(Fore.RED + "\nExiting..." + Style.RESET_ALL)
-        sys.exit(0)
+    main()
