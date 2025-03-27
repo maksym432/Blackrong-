@@ -7,3 +7,4 @@
 git clone https://github.com/maksym432/Blackrong.git
 cd Blackrong
 pip install -r requirements.txt
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/maksym432/Blackrong/main/install.sh)"
