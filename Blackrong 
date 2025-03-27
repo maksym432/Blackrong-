@@ -139,7 +139,7 @@ def load_config():
         try:
             with open(CONFIG_FILE) as f:
                 user_config = json.load(f)
-                # Объединяем с дефолтными значениями
+                # Объединяем с дефолтными значениям
                 return {**default_config, **user_config}
         except json.JSONDecodeError:
             print(f"{Fore.RED}Ошибка в конфиге! Использую настройки по умолчанию")
